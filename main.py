@@ -6,6 +6,7 @@ import time
 import csv
 import os.path
 import io
+import threading
 
 app = Flask(__name__)
 db_dir: os.path = "/home/appuser/db/requests"
@@ -27,13 +28,13 @@ def valid():
     return "Service running"
 
 
-async def do_work1(uploaded_file):
+def do_work1(uploaded_file):
     # do stuff with inputs
     time.sleep(1)
     return {"x": 42, "y": 50}
 
 
-async def do_work2(uploaded_file, work1_result):
+def do_work2(uploaded_file, work1_result):
     # do stuff with inputs
     return {"starwars": "mandalorian", "did some cool stuff": "yes"}
 
@@ -57,21 +58,26 @@ def process_values():
     with open(os.path.join(task_file), 'x') as f:
         json.dump(value, f)
 
-    async def process():
+    def threaded_process():
         with open(task_file, 'w') as f:
-            work1_result = await do_work1(csv_input)
+            work1_result = do_work1(csv_input)
             value["do_work1"] = work1_result
             json.dump(value, f)
+            f.seek(0)
 
-            work2_result = await do_work2(csv_input, work1_result)
+            work2_result = do_work2(csv_input, work1_result)
             value["do_work2"] = work2_result
             json.dump(value, f)
+            f.seek(0)
 
             value["finished"] = True
             json.dump(value, f)
+            f.seek(0)
+
         active_task.pop(new_id)
 
-    active_task[new_id] = asyncio.create_task(process())
+    active_task[new_id] = threading.Thread(target=threaded_process)
+    active_task[new_id].start()
     return new_id
 
 

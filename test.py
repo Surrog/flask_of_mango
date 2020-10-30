@@ -1,5 +1,7 @@
 import unittest
 import requests as req
+import time
+import json
 
 
 class TestService(unittest.TestCase):
@@ -15,12 +17,17 @@ class TestService(unittest.TestCase):
             request_id = req.post('http://localhost:5000/process_values', files={"input": f})
             self.assertTrue(request_id.ok)
             print("received id: " + str(request_id.content))
-            r = req.get('http://localhost:5000/status/' + str(request_id))
-            self.assertNotEqual(r, "id not found")
-            print(r.content)
+            time.sleep(2)
+            r = req.get(b'http://localhost:5000/status/' + request_id.content)
+            self.assertNotEqual(r.content, b'{"error": "Id not found"}')
+            value = json.loads(r.content)
+            print(value)
+            self.assertNotEqual(value["input"], None)
+            self.assertNotEqual(value["id"], None)
+            self.assertNotEqual(value["do_work1"], None)
+            self.assertNotEqual(value["do_work2"], None)
+            self.assertNotEqual(value["finished"], None)
             return
-        self.assertTrue(False, "failed to load file")
-
 
 if __name__ == '__main__':
     unittest.main()
