@@ -1,30 +1,25 @@
-from flask import Flask, request
-import pymongo
-import subprocess
+from flask import Flask, request, make_response
+import json
 import uuid
 import asyncio
 import time
+import csv
+import os.path
+import io
 
 app = Flask(__name__)
-mongoC: pymongo.MongoClient
-request_db: pymongo.collection
+db_dir: os.path = "/home/appuser/db/requests"
 active_task = {}
 
 
 @app.route("/status/<task_id>")
 def status(task_id):
-    print(task_id)
-    print(request_db)
+    task_path = os.path.join(db_dir, task_id + ".json")
+    if not os.path.exists(task_path):
+        return make_response(json.dumps({"error": "Id not found"}), 404)
 
-    collection = request_db.get_collection(str(task_id))
-    print(collection)
-    cursor = collection.find({})
-    print(cursor)
-    result = []
-    for doc in cursor:
-        result.append(str(doc))
-
-    return str(result)
+    with open(task_path) as f:
+        return f.read()
 
 
 @app.route('/')
@@ -43,34 +38,48 @@ async def do_work2(uploaded_file, work1_result):
     return {"starwars": "mandalorian", "did some cool stuff": "yes"}
 
 
+def get_unique_id():
+    new_id = uuid.uuid4()
+    while os.path.exists(os.path.join(db_dir, str(new_id))):
+        new_id = uuid.uuid4()
+    return str(new_id)
+
+
 @app.route("/process_values", methods=['POST'])
 def process_values():
-    uploaded_file = request.files['file']
-    new_id = uuid.uuid4()
-    while request_db.get_collection(new_id) is not None:
-        new_id = uuid.uuid4()
-    collection = request_db.create_collection(new_id)
-    collection.insert_many({"finished": False})
+    stream = io.BytesIO()
+    request.files['input'].save(stream)
+    csv_input = csv.reader(stream)
 
-    async def process(task_id, task_collection):
-        work1_result = await do_work1(uploaded_file)
-        task_collection.insert_one({"function": "do_work1", "result": work1_result})
-        work2_result = await do_work2(uploaded_file, work1_result)
-        task_collection.insert_one({"function": "do_work2", "result": work2_result})
-        task_collection.replace_one({"finished": False}, {"finished": True})
-        active_task.pop(task_id)
+    new_id = get_unique_id()
+    task_file = os.path.join(db_dir, new_id + ".json")
+    value = {"input": str(stream.getvalue()), "id": new_id}
+    with open(os.path.join(task_file), 'x') as f:
+        json.dump(value, f)
 
-    active_task[str(new_id)] = asyncio.create_task(process(new_id, collection))
-    return str(new_id)
+    async def process():
+        with open(task_file, 'w') as f:
+            work1_result = await do_work1(csv_input)
+            value["do_work1"] = work1_result
+            json.dump(value, f)
+
+            work2_result = await do_work2(csv_input, work1_result)
+            value["do_work2"] = work2_result
+            json.dump(value, f)
+
+            value["finished"] = True
+            json.dump(value, f)
+        active_task.pop(new_id)
+
+    active_task[new_id] = asyncio.create_task(process())
+    return new_id
 
 
 @app.before_first_request
 def before_first_request():
-    global mongoC
-    global request_db
-    subprocess.run("mongod")  # make sure that the service is running before creating mongo client
-    mongoC = pymongo.MongoClient()
-    request_db = mongoC["requests"]
+    # connect to db to a real db on a real world
+    if not os.path.exists(db_dir):
+        os.mkdir(db_dir)
 
 
 if __name__ == '__main__':
