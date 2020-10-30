@@ -1,0 +1,12 @@
+[[source]]
+nam = "flask_of_mango"
+
+[dev-packages]
+
+[packages]
+flask = "*"
+python-decouple = "*"
+pymongo = "*"
+
+[requires]
+python_version >= "3.6"
