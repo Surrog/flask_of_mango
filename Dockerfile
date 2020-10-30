@@ -1,19 +1,19 @@
-FROM python:latest
+FROM mongo:latest
 
 LABEL maintainer=francoisancel@gmail.com
-RUN apt-get update && apt-get install -y gcc mongodb python3
-RUN systemctl enable mongod --now
+RUN apt-get update && apt-get install -y gcc python3 python3-pip
 
 RUN useradd --create-home --shell /bin/bash appuser
 USER appuser
-ENV PATH="home/appuser/.local/bin:${PATH}"
+ENV PATH="/home/appuser/.local/bin:${PATH}"
 RUN mkdir /home/appuser/src && mkdir /home/appuser/static && mkdir /home/appuser/db
 
-COPY main.py /home/appuser/src
-COPY Pipfile /home/appuser/src
+COPY requirement.txt /home/appuser/src
 WORKDIR /home/appuser/src
+EXPOSE 5000
 
-RUN python -m pip install --upgrade pip
-RUN pip install -p
+RUN python3 -m pip install --upgrade pip
+RUN python3 -m pip install -U -r requirement.txt
 
-CMD ["python", "main.py"]
+COPY main.py /home/appuser/src
+CMD ["python3", "main.py"]
