@@ -26,6 +26,7 @@ class TestService(unittest.TestCase):
             self.assertNotEqual(value["id"], None)
             self.assertNotEqual(value["do_work1"], None)
             self.assertNotEqual(value["do_work2"], None)
+            self.assertNotEqual(value["do_work3"], None)
             self.assertNotEqual(value["finished"], None)
             return
 
