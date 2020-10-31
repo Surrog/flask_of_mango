@@ -38,7 +38,7 @@ def do_work1(uploaded_file):
     col_num = 0
     for row in uploaded_file:
         row_num += 1
-        col_num = max(col_num, row.count())
+        col_num = max(col_num, len(row))
     return {"row_num": row_num, "col_num": col_num}
 
 
@@ -47,9 +47,9 @@ def do_work2(uploaded_file, work1_result):
     row_type = []
     row_count = 0
     for row in uploaded_file:
-        if row.count() != work1_result["col_num"]:
+        if len(row) != work1_result["col_num"]:
             missing_line.append(row_count)
-        elif row_count > 0:
+        elif row_count > 0 and len(row_type) == 0 :
             for value in row:
                 if value.isnumeric() and '.' in value:
                     row_type.append("float")
@@ -68,20 +68,21 @@ def do_work3(uploaded_file, work2_result):
         if t == "string":
             result[i] = 0
         else:
-            result[i] = {"mean": 0, "median": 0, "min": sys.float_info.max, "max": sys.float_info.min}
+            result[i] = {
+                "mean": 0,
+                "min": float(sys.float_info.max),
+                "max": float(sys.float_info.min)
+            }
 
-    rowcount = 0
-    for row in uploaded_file:
-        colnum = 0
-        rowcount += 1
-        for value in row:
-            if work2_result["type"][colnum] == "string":
-                result[colnum] += len(value.split())
-            else:
-                result[colnum]["mean"] += value
-                result[colnum]["min"] = min(value, result[colnum]["min"])
-                result[colnum]["max"] = max(value, result[colnum]["max"])
-            colnum += 1
+    for (rowcount, row) in enumerate(uploaded_file):
+        for (colnum, value) in enumerate(row):
+            if rowcount > 0:
+                if work2_result["type"][colnum] == "string":
+                    result[colnum] += len(value.split())
+                else:
+                    result[colnum]["mean"] = float(result[colnum]["mean"]) + float(value)
+                    result[colnum]["min"] = min(float(value), float(result[colnum]["min"]))
+                    result[colnum]["max"] = max(float(value), float(result[colnum]["max"]))
 
     for (i, t) in enumerate(work2_result["type"]):
         if t != "string":
@@ -107,23 +108,28 @@ def process_values():
         json.dump(value, f)
 
     def threaded_process():
-        csv_input = csv.reader(stream, delimiter=',')
+        stream.seek(0)
+        strStream = io.TextIOWrapper(stream, encoding='utf-8')
+        csv_input = csv.reader(strStream, delimiter=',')
 
         with open(task_file, 'w') as f:
             work1_result = do_work1(csv_input)
             value["do_work1"] = work1_result
             json.dump(value, f)
 
+            strStream.seek(0)
             work2_result = do_work2(csv_input, work1_result)
             value["do_work2"] = work2_result
             f.seek(0)
             json.dump(value, f)
 
+            strStream.seek(0)
             work3_result = do_work3(csv_input, work2_result)
             value["do_work3"] = work3_result
             f.seek(0)
             json.dump(value, f)
 
+            strStream.seek(0)
             value["finished"] = True
             f.seek(0)
             json.dump(value, f)
