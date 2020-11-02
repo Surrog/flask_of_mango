@@ -7,10 +7,12 @@ import os.path
 import io
 import threading
 import copy
+import concurrent.futures
 from decouple import config
 
 app = Flask(__name__)
 db_dir: os.path = config("DB_PATH", default="/home/appuser/db")
+thread_pool = concurrent.futures.ThreadPoolExecutor(int(config("EXECUTOR_THREAD", 5)));
 active_task = {}
 
 
@@ -109,6 +111,39 @@ def get_unique_id() -> str:
     return str(new_id)
 
 
+def process(input_stream, output_file_path, result):
+    input_stream.seek(0)
+    strStream = io.TextIOWrapper(input_stream, encoding='utf-8')
+    csv_input = csv.reader(strStream, delimiter=',')
+
+    with open(output_file_path, 'w') as f:
+        if "do_work1" not in result:
+            strStream.seek(0)
+            work1_result = do_work1(csv_input)
+            result["do_work1"] = work1_result
+            json.dump(result, f)
+
+        if "do_work2" not in result:
+            strStream.seek(0)
+            work2_result = do_work2(csv_input, work1_result)
+            result["do_work2"] = work2_result
+            f.seek(0)
+            json.dump(result, f)
+
+        if "do_work3" not in result:
+            strStream.seek(0)
+            work3_result = do_work3(csv_input, work2_result)
+            result["do_work3"] = work3_result
+            f.seek(0)
+            json.dump(result, f)
+
+        strStream.seek(0)
+        result["finished"] = True
+        f.seek(0)
+        json.dump(result, f)
+
+    active_task.pop(result["id"])
+
 @app.route("/process_values", methods=['POST'])
 def process_values():
     stream = io.BytesIO()
@@ -116,42 +151,27 @@ def process_values():
 
     new_id = get_unique_id()
     task_file = get_collection(new_id)
-    value = {"input": str(stream.getvalue()), "id": new_id}
+    result = {"input": str(stream.getvalue()), "id": new_id}
     with open(task_file, 'x') as f:
-        json.dump(value, f)
+        json.dump(result, f)
 
     def threaded_process():
-        stream.seek(0)
-        strStream = io.TextIOWrapper(stream, encoding='utf-8')
-        csv_input = csv.reader(strStream, delimiter=',')
+        process(stream, task_file, result)
 
-        with open(task_file, 'w') as f:
-            work1_result = do_work1(csv_input)
-            value["do_work1"] = work1_result
-            json.dump(value, f)
-
-            strStream.seek(0)
-            work2_result = do_work2(csv_input, work1_result)
-            value["do_work2"] = work2_result
-            f.seek(0)
-            json.dump(value, f)
-
-            strStream.seek(0)
-            work3_result = do_work3(csv_input, work2_result)
-            value["do_work3"] = work3_result
-            f.seek(0)
-            json.dump(value, f)
-
-            strStream.seek(0)
-            value["finished"] = True
-            f.seek(0)
-            json.dump(value, f)
-
-        active_task.pop(new_id)
-
-    active_task[new_id] = threading.Thread(target=threaded_process)
-    active_task[new_id].start()
+    active_task[new_id] = thread_pool.submit(threaded_process)
     return new_id
+
+def restart_unfinished_process():
+    for entry in os.scandir(db_dir):
+        if entry.is_file() and entry.name.endswith("json"):
+            with open(entry) as f:
+                result = json.load(f)
+                if result["finished"] is False and result["id"] not in active_task:
+                    def threaded_process():
+                        input_stream = io.StringIO(result["input"])
+                        process(input_stream, entry, result)
+
+                    active_task[result["id"]] = thread_pool.submit(threaded_process)
 
 
 @app.before_first_request
@@ -159,6 +179,7 @@ def before_first_request():
     # connect to db to a real db on a real world
     if not os.path.exists(db_dir):
         os.mkdir(db_dir)
+    restart_unfinished_process()
 
 
 if __name__ == '__main__':
