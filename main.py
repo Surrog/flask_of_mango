@@ -5,14 +5,13 @@ import sys
 import csv
 import os.path
 import io
-import threading
 import copy
 import concurrent.futures
 from decouple import config
 
 app = Flask(__name__)
 db_dir: os.path = config("DB_PATH", default="/home/appuser/db")
-thread_pool = concurrent.futures.ThreadPoolExecutor(int(config("EXECUTOR_THREAD", 5)));
+thread_pool = concurrent.futures.ThreadPoolExecutor(int(config("EXECUTOR_THREAD", 5)))
 active_task = {}
 
 
@@ -111,38 +110,35 @@ def get_unique_id() -> str:
     return str(new_id)
 
 
+def do_dump_work(str_stream, result, out_file, fn, *args, **kwargs):
+    if fn.__name__ not in result:
+        str_stream.seek(0)
+        work_result = fn(*args, **kwargs)
+        result[fn.__name__] = work_result
+        out_file.seek(0)
+        json.dump(result, out_file)
+    else:
+        work_result = result[fn.__name__]
+    return work_result
+
+
 def process(input_stream, output_file_path, result):
     input_stream.seek(0)
-    strStream = io.TextIOWrapper(input_stream, encoding='utf-8')
-    csv_input = csv.reader(strStream, delimiter=',')
+    str_stream = io.TextIOWrapper(input_stream, encoding='utf-8')
+    csv_input = csv.reader(str_stream, delimiter=',')
 
     with open(output_file_path, 'w') as f:
-        if "do_work1" not in result:
-            strStream.seek(0)
-            work1_result = do_work1(csv_input)
-            result["do_work1"] = work1_result
-            json.dump(result, f)
+        work1_result = do_dump_work(str_stream, result, f, do_work1, csv_input)
+        work2_result = do_dump_work(str_stream, result, f, do_work2, csv_input, work1_result)
+        do_dump_work(str_stream, result, f, do_work3, csv_input, work2_result)
 
-        if "do_work2" not in result:
-            strStream.seek(0)
-            work2_result = do_work2(csv_input, work1_result)
-            result["do_work2"] = work2_result
-            f.seek(0)
-            json.dump(result, f)
-
-        if "do_work3" not in result:
-            strStream.seek(0)
-            work3_result = do_work3(csv_input, work2_result)
-            result["do_work3"] = work3_result
-            f.seek(0)
-            json.dump(result, f)
-
-        strStream.seek(0)
+        str_stream.seek(0)
         result["finished"] = True
         f.seek(0)
         json.dump(result, f)
 
     active_task.pop(result["id"])
+
 
 @app.route("/process_values", methods=['POST'])
 def process_values():
@@ -160,6 +156,7 @@ def process_values():
 
     active_task[new_id] = thread_pool.submit(threaded_process)
     return new_id
+
 
 def restart_unfinished_process():
     for entry in os.scandir(db_dir):
