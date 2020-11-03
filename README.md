@@ -8,11 +8,10 @@ Basic flask microserver
 
 ## install
 * `git clone` local
-* `./build.sh` to build the docker image
-* `./start.sh` to start the flask server
-* `./stop.sh` to stop the server
+* `sudo docker-compose build` to build the docker image
+* `sudo docker-compose up -d` to start the flask & mongo server
+* `sudo docker-compose down` to stop every docker images
 
 ## todo
-* Actually using mongodb, create a docker compose to handle multiple docker instances
 * Move threaded process in a asyncio python coroutine
 * Do a cleanup service to purge old data stored in json

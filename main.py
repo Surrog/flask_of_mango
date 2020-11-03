@@ -1,141 +1,95 @@
 from flask import Flask, request, make_response
 import json
 import uuid
-import sys
 import csv
 import os.path
 import io
-import copy
 import concurrent.futures
 from decouple import config
+import pymongo
+import work
 
 app = Flask(__name__)
-db_dir: os.path = config("DB_PATH", default="/home/appuser/db")
+mongo_host: str = config("DB_HOST", default="")
 thread_pool = concurrent.futures.ThreadPoolExecutor(int(config("EXECUTOR_THREAD", 5)))
+pymongoC: pymongo.MongoClient
+request_db: pymongo.mongo_client.database.Database
 active_task = {}
 
 
-def get_collection(task_id) -> os.path:
-    return os.path.join(db_dir, str(task_id) + ".json")
+def get_collection(task_id: str) -> pymongo.collection.Collection:
+    return request_db[task_id]
 
 
-@app.route("/status/<task_id>")
-def status(task_id) -> str:
-    task_path = get_collection(task_id)
-    if not os.path.exists(task_path):
-        return make_response(json.dumps({"error": "Id not found"}), 404)
-
-    with open(task_path) as f:
-        return f.read()
+def collection_exist(task_id: str) -> bool:
+    return request_db[task_id].estimated_document_count() > 0
 
 
-@app.route('/')
-def valid():
-    return "Service running"
-
-
-def do_work1(uploaded_file):
-    # do stuff with inputs
-    row_num = 0
-    col_num = 0
-    for row in uploaded_file:
-        row_num += 1
-        col_num = max(col_num, len(row))
-    return {"row_num": row_num, "col_num": col_num}
-
-
-def is_float(value) -> bool:
-    try:
-        float(value)
-        return True
-    except ValueError:
-        return False
-
-
-def do_work2(uploaded_file, work1_result):
-    missing_line = []
-    row_type = []
-    row_count = 0
-    for row in uploaded_file:
-        if len(row) != work1_result["col_num"]:
-            missing_line.append(row_count)
-        elif row_count > 0 and len(row_type) == 0:
-            for value in row:
-                if value.isnumeric():
-                    row_type.append("int")
-                elif is_float(value):
-                    row_type.append("float")
-                else:
-                    row_type.append("string")
-        row_count += 1
-
-    return {"missing value in line": missing_line, "type": row_type}
-
-
-def do_work3(uploaded_file, work2_result):
-    result = copy.deepcopy(work2_result["type"])
-    for (i, t) in enumerate(work2_result["type"]):
-        if t == "string":
-            result[i] = 0
-        else:
-            result[i] = {
-                "mean": 0,
-                "min": float(sys.float_info.max),
-                "max": float(sys.float_info.min)
-            }
-
-    rowcount = 0
-    for row in uploaded_file:
-        for (colnum, value) in enumerate(row):
-            if rowcount > 0:
-                if work2_result["type"][colnum] == "string":
-                    result[colnum] += len(value.split())
-                else:
-                    result[colnum]["mean"] = float(result[colnum]["mean"]) + float(value)
-                    result[colnum]["min"] = min(float(value), float(result[colnum]["min"]))
-                    result[colnum]["max"] = max(float(value), float(result[colnum]["max"]))
-        rowcount += 1
-
-    if rowcount > 0:
-        for (i, t) in enumerate(work2_result["type"]):
-            if t != "string":
-                result[i]["mean"] = result[i]["mean"] / (rowcount - 1)
+def build_result_from_collection(collection: pymongo.collection.Collection) -> dict:
+    result = {}
+    for entry in collection.find():
+        for (key, val) in entry.items():
+            result[key] = val
+    if "_id" in result:
+        del result["_id"]
     return result
 
 
+def dump_collection(task_id: str) -> str:
+    return json.dumps(build_result_from_collection(request_db[task_id]))
+
+
+@app.route("/status/<task_id>")
+def status(task_id: str) -> str:
+    if not collection_exist(task_id):
+        return make_response(json.dumps({"error": "Id not found"}), 404)
+    return dump_collection(task_id)
+
+
+@app.route('/')
+def valid() -> str:
+    return "Service running"
+
+
 def get_unique_id() -> str:
-    new_id = uuid.uuid4()
-    while os.path.exists(get_collection(new_id)):
-        new_id = uuid.uuid4()
-    return str(new_id)
+    new_id = str(uuid.uuid4())
+    while collection_exist(new_id):
+        new_id = str(uuid.uuid4())
+    return new_id
 
 
-def do_dump_work(str_stream, result, out_file, fn, *args, **kwargs):
+def mongo_dump(result: dict, collection: pymongo.collection.Collection, fn, *args, **kwargs):
     if fn.__name__ not in result:
-        str_stream.seek(0)
         work_result = fn(*args, **kwargs)
         result[fn.__name__] = work_result
-        out_file.seek(0)
-        json.dump(result, out_file)
+        print(result)
+        collection.insert_one({fn.__name__: work_result})
     else:
         work_result = result[fn.__name__]
     return work_result
 
 
-def process(input_stream, output_file_path, result):
+def csv_to_array(input_stream) -> []:
+    result = []
     input_stream.seek(0)
     str_stream = io.TextIOWrapper(input_stream, encoding='utf-8')
     csv_input = csv.reader(str_stream, delimiter=',')
+    for row in csv_input:
+        result.append(row)
+    return result
 
-    with open(output_file_path, 'w') as f:
-        work1_result = do_dump_work(str_stream, result, f, do_work1, csv_input)
-        work2_result = do_dump_work(str_stream, result, f, do_work2, csv_input, work1_result)
-        do_dump_work(str_stream, result, f, do_work3, csv_input, work2_result)
 
-        str_stream.seek(0)
-        result["finished"] = True
-        f.seek(0)
-        json.dump(result, f)
+def process(input_stream, collection: pymongo.collection.Collection, result: dict):
+    array_input = csv_to_array(input_stream)
+
+    collection.insert_one({"finished": False})
+    result["finished"] = False
+
+    work1_result = mongo_dump(result, collection, work.do_work1, array_input)
+    work2_result = mongo_dump(result, collection, work.do_work2, array_input, work1_result)
+    mongo_dump(result, collection, work.do_work3, array_input, work2_result)
+    collection.replace_one({"finished": False}, {"finished": True})
+    result["finished"] = True
 
     active_task.pop(result["id"])
 
@@ -145,37 +99,39 @@ def process_values():
     stream = io.BytesIO()
     request.files['input'].save(stream)
 
-    new_id = get_unique_id()
-    task_file = get_collection(new_id)
+    new_id: str = get_unique_id()
+    task = get_collection(new_id)
+    task.insert_many([{"input": str(stream.getvalue())}, {"id": new_id}])
     result = {"input": str(stream.getvalue()), "id": new_id}
-    with open(task_file, 'x') as f:
-        json.dump(result, f)
 
     def threaded_process():
-        process(stream, task_file, result)
+        process(stream, task, result)
 
     active_task[new_id] = thread_pool.submit(threaded_process)
     return new_id
 
 
 def restart_unfinished_process():
-    for entry in os.scandir(db_dir):
-        if entry.is_file() and entry.name.endswith("json"):
-            with open(entry) as f:
-                result = json.load(f)
-                if result["finished"] is False and result["id"] not in active_task:
-                    def threaded_process():
-                        input_stream = io.StringIO(result["input"])
-                        process(input_stream, entry, result)
+    for entry in request_db.list_collection_names():
+        collection = request_db[str(entry)]
+        result = build_result_from_collection(collection)
+        if "input" not in result or "id" not in result:
+            request_db.drop_collection(collection)
+            continue
+        if ("finished" not in result or result["finished"] is False) and result["id"] not in active_task:
+            def threaded_process():
+                input_stream = io.StringIO(result["input"])
+                process(input_stream, entry, result)
 
-                    active_task[result["id"]] = thread_pool.submit(threaded_process)
+            active_task[result["id"]] = thread_pool.submit(threaded_process)
 
 
 @app.before_first_request
 def before_first_request():
-    # connect to db to a real db on a real world
-    if not os.path.exists(db_dir):
-        os.mkdir(db_dir)
+    global request_db
+    global pymongoC
+    pymongoC = pymongo.MongoClient(host=mongo_host)
+    request_db = pymongoC["request"]
     restart_unfinished_process()
 
 
