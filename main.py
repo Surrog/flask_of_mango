@@ -2,7 +2,6 @@ from flask import Flask, request, make_response
 import json
 import uuid
 import csv
-import os.path
 import io
 import concurrent.futures
 from decouple import config
