@@ -10,3 +10,5 @@ services:
       - .env
   mongodb:
     image: mongo:latest
+    volumes:
+      - ./db:/data/db
