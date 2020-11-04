@@ -13,5 +13,4 @@ Basic flask microserver
 * `sudo docker-compose down` to stop every docker images
 
 ## todo
-* Move threaded process in a asyncio python coroutine
 * Do a cleanup service to purge old data stored in json

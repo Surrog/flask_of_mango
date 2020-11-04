@@ -7,6 +7,7 @@ import concurrent.futures
 from decouple import config
 import pymongo
 import work
+import asyncio
 
 app = Flask(__name__)
 mongo_host: str = config("DB_HOST", default="")
@@ -57,44 +58,8 @@ def get_unique_id() -> str:
     return new_id
 
 
-def mongo_dump(result: dict, collection: pymongo.collection.Collection, fn, *args, **kwargs):
-    if fn.__name__ not in result:
-        work_result = fn(*args, **kwargs)
-        result[fn.__name__] = work_result
-        print(result)
-        collection.insert_one({fn.__name__: work_result})
-    else:
-        work_result = result[fn.__name__]
-    return work_result
-
-
-def csv_to_array(input_stream) -> []:
-    result = []
-    input_stream.seek(0)
-    str_stream = io.TextIOWrapper(input_stream, encoding='utf-8')
-    csv_input = csv.reader(str_stream, delimiter=',')
-    for row in csv_input:
-        result.append(row)
-    return result
-
-
-def process(input_stream, collection: pymongo.collection.Collection, result: dict):
-    array_input = csv_to_array(input_stream)
-
-    collection.insert_one({"finished": False})
-    result["finished"] = False
-
-    work1_result = mongo_dump(result, collection, work.do_work1, array_input)
-    work2_result = mongo_dump(result, collection, work.do_work2, array_input, work1_result)
-    mongo_dump(result, collection, work.do_work3, array_input, work2_result)
-    collection.replace_one({"finished": False}, {"finished": True})
-    result["finished"] = True
-
-    active_task.pop(result["id"])
-
-
 @app.route("/process_values", methods=['POST'])
-def process_values():
+def process_values() -> str:
     stream = io.BytesIO()
     request.files['input'].save(stream)
 
@@ -104,7 +69,9 @@ def process_values():
     result = {"input": str(stream.getvalue()), "id": new_id}
 
     def threaded_process():
-        process(stream, task, result)
+        asyncio.run(work.process(stream, task, result), debug=True)
+        print("async done")
+        active_task.pop(result["id"])
 
     active_task[new_id] = thread_pool.submit(threaded_process)
     return new_id
@@ -120,7 +87,8 @@ def restart_unfinished_process():
         if ("finished" not in result or result["finished"] is False) and result["id"] not in active_task:
             def threaded_process():
                 input_stream = io.StringIO(result["input"])
-                process(input_stream, entry, result)
+                asyncio.run(work.process(input_stream, entry, result))
+                active_task.pop(result["id"])
 
             active_task[result["id"]] = thread_pool.submit(threaded_process)
 
